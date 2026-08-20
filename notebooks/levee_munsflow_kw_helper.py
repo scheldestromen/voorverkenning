@@ -4,6 +4,9 @@ import pandas as pd
 import logging
 import json
 import tempfile
+from tqdm.auto import tqdm
+
+import matplotlib.dates as mdates
 
 META_DATA_KEYS = [
     "region",
@@ -113,7 +116,7 @@ def json_to_hpd(
             and fn not in tz_meta_members
         ]
 
-        for json_path in json_files:
+        for json_path in tqdm(json_files, desc="JSON inlezen", unit="bestand"):
             with zip_ref.open(json_path, "r") as f:
                 json_text = io.TextIOWrapper(f, encoding="utf-8").read()
 
@@ -188,7 +191,84 @@ def json_to_hpd(
     return oc_gwl
 
 
-# if __name__ == "__main__":
-#    obs = json_to_hpd(
-#        r'c:\data\python\cloned\N27-2\data\obs\json\json.zip'
-#    )
+def ax_lim_as_dates(ax):
+    x0, x1 = ax.get_xlim()
+    x_start, x_end = pd.to_datetime(
+        mdates.num2date([x0, x1])).tz_localize(None)
+    if x_start > x_end:
+        x_start, x_end = x_end, x_start
+
+    return x_start, x_end
+
+
+def plot_dates_as_vline(
+        df,
+        ax,
+        date_colname='date',
+        color='tab:orange',
+        label=None
+):
+    # check if ax is a list
+    if isinstance(ax, list):
+        plot_axes = ax
+    else:
+        plot_axes = [ax]
+    x_start, x_end = ax_lim_as_dates(plot_axes[0])
+
+    # gebruik alle relevante neerslagmomenten opnieuw en beperk tot zichtbare periode
+    dates_all = (
+        df[date_colname]
+        .dt.normalize()
+        .drop_duplicates()
+    )
+    dates_in_xlim = dates_all[(dates_all >= x_start) & (dates_all <= x_end)]
+
+    if dates_in_xlim.empty:
+        plot_axes[0].text(
+            0.02, 0.95, "Geen relevante neerslagmomenten binnen x-limieten",
+            transform=plot_axes[0].transAxes, ha="left", va="top", fontsize=9,
+            bbox=dict(facecolor="white", alpha=0.8, edgecolor="0.7")
+        )
+        df_plot = pd.DataFrame({"date": pd.to_datetime([])})
+    else:
+        df_plot = pd.DataFrame({"date": dates_in_xlim})
+    for date in df_plot['date']:
+        for ax in plot_axes:
+            ax.axvline(x=date, color=color, linewidth=0.5, label=label)
+
+
+def add_offset_for_close_points(oc, col_offset='distance_to_ref', suffix='plot', dup_offset=1.0):
+    col_offset_plot = f"{col_offset}_{suffix}"
+    oc[col_offset_plot] = oc[col_offset].copy()
+    oc = oc.sort_values(col_offset_plot)
+    while True:
+        dup_offset = oc.groupby(col_offset_plot).cumcount() * dup_offset
+
+        if dup_offset.gt(0).any():
+            oc[col_offset_plot] = oc[col_offset_plot] + dup_offset
+            oc = oc.sort_values(col_offset_plot)
+            continue
+        else:
+            break
+    return oc
+
+
+def short_legend_precip(ax):
+    handles, labels = ax.get_legend_handles_labels()
+    unique = {}
+    for h, l in zip(handles, labels):
+        if l and l != "_nolegend_" and l not in unique:
+            unique[l] = h
+
+    leg = ax.legend(
+        unique.values(),
+        unique.keys(),
+        loc='center right',
+        bbox_to_anchor=(-0.05, 0.3),
+        borderaxespad=0.0,
+        framealpha=1.0
+    )
+    # keep tight_layout from resizing/repositioning other axes
+    leg.set_in_layout(False)
+    leg.set_zorder(10_000)
+    leg.set_clip_on(False)
