@@ -5,6 +5,8 @@ import logging
 import json
 import tempfile
 from tqdm.auto import tqdm
+import matplotlib.pyplot as plt
+
 
 import matplotlib.dates as mdates
 
@@ -289,7 +291,7 @@ def plot_doodtij(
             x, "tzinfo", None) is not None else x
     )
 
-    for _, row in df_doodtij.loc[(df_doodtij.doodtij_verwachting_localize >= x_start) & (df_doodtij.doodtij_verwachting_localize <= x_end)].iterrows():
+    for i, (_, row) in enumerate(df_doodtij.loc[(df_doodtij.doodtij_verwachting_localize >= x_start) & (df_doodtij.doodtij_verwachting_localize <= x_end)].iterrows()):
         t_doodtij = row.doodtij_verwachting_localize
 
         ax.axvline(
@@ -297,7 +299,7 @@ def plot_doodtij(
             color='red',
             linestyle='--',
             alpha=0.5,
-            label='doodtij'
+            label='doodtij' if i == 0 else None
         )
 
 
@@ -350,3 +352,56 @@ def select_surfacelevelprofile(dp_center, df_profiles, delta_dp=1, region='Os'):
         logging.debug(
             f"No surface level profile found for dp{dp_center:.1f} in region {region}")
         return None, None, closest_dp_profile
+
+
+def plot_pb_precip(
+        obs_gws,
+        precip_df,
+        df_doodtij=None,
+        start=None,
+        end=None,
+        col_gwl='gwl_mnap'
+):
+    fig, axes = plt.subplots(nrows=2, figsize=(
+        12, 4), gridspec_kw={"hspace": 0.35})
+
+    # bovenste plot
+    # peilbuis
+    for index, row in obs_gws.iterrows():
+        row.obs[col_gwl].loc[start:end].plot(
+            ax=axes[0], linewidth=1.5, label=f"peilbuis {row.name.split('_')[-2]}, BKF:{row.screen_top:.2f} m NAP")
+    first_obs = row.obs[col_gwl].loc[start:end].dropna().index[0]
+    axes[0].axvline(x=first_obs, color='darkgray', ls=':',
+                    linewidth=1.5, label=f'eerste waarneming {first_obs:%d-%m-%Y}')
+
+    # doodtij
+    if df_doodtij is not None:
+        plot_doodtij(axes[0], df_doodtij)
+
+    # layout
+    axes[0].legend(loc='upper left', fontsize=8)
+    axes[0].tick_params(axis='x', labelrotation=0)
+    axes[0].set_ylabel('m NAP')
+
+    # onderste plot
+    # neerslag
+    # precip_df.loc[first_obs:end, 'cumulative'].plot(ax=axes[1], color='tab:red', linewidth=1.5, label=f'cummulatief sinds 1 {month_name}')
+    daily_precip = precip_df.loc[first_obs:end, 'RH'].resample(
+        'D').sum() * 1000  # convert to mm
+    axes[1].bar(
+        daily_precip.index,
+        daily_precip.values,
+        width=0.9,
+        color='tab:blue',
+        label=f'Dagelijkse neerslagsom {precip_df.meta["location"].capitalize()}'
+    )
+
+    # layout
+    axes[1].set_ylabel('neerslag (mm)')
+    axes[1].legend(loc='upper left', fontsize=8)
+
+    for ax in axes:
+        ax.set_xlim([first_obs-pd.Timedelta('2d'), end])
+        ax.grid(True)
+
+    return fig, axes
