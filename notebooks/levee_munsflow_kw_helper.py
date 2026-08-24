@@ -272,3 +272,81 @@ def short_legend_precip(ax):
     leg.set_in_layout(False)
     leg.set_zorder(10_000)
     leg.set_clip_on(False)
+
+
+def plot_doodtij(
+        ax,
+        df_doodtij,
+        x_start=None,
+        x_end=None
+):
+    if x_start is None and x_end is None:
+        x_start, x_end = ax_lim_as_dates(ax)
+
+    # make doodtij_verwachting_localize timezone-naive
+    df_doodtij['doodtij_verwachting_localize'] = df_doodtij['doodtij_verwachting_localize'].apply(
+        lambda x: x.tz_localize(None) if getattr(
+            x, "tzinfo", None) is not None else x
+    )
+
+    for _, row in df_doodtij.loc[(df_doodtij.doodtij_verwachting_localize >= x_start) & (df_doodtij.doodtij_verwachting_localize <= x_end)].iterrows():
+        t_doodtij = row.doodtij_verwachting_localize
+
+        ax.axvline(
+            t_doodtij,
+            color='red',
+            linestyle='--',
+            alpha=0.5,
+            label='doodtij'
+        )
+
+
+def select_surfacelevelprofile(dp_center, df_profiles, delta_dp=1, region='Os'):
+    """
+    Select and plot the surface level profiles  in the specified region.
+    Copied from Geolookup repo
+    Args:
+        dp_center: Central dike pole number
+        df_profiles: DataFrame with surface level profiles
+        delta_dp: Range around central dike pole
+        region: Region name
+    Returns:
+        closest_dp_profile: Closest dike pole with surface level profile
+    """
+
+    # select data
+    df_profiles_subset = df_profiles[
+        df_profiles.dp.between(dp_center - delta_dp, dp_center + delta_dp) &
+        (df_profiles.region == region)
+    ]
+    # find closest dp in df_profiles
+    closest_dp_profile = df_profiles_subset.dp.iloc[(
+        df_profiles_subset.dp - dp_center).abs().argsort()[:1]].values[0]
+    logging.debug(
+        f'Closest dp with surface level profile to {dp_center} is {closest_dp_profile}')
+
+    # prepare plotting
+    lst_plot_profiel = ['mv.bin', 'sloot.1a', 'sloot.1c', 'sloot.1d', 'sloot.1b', 'weg.1', 'teen.1', 'berm.1a',
+                        'berm.1b', 'kruin.1', 'kruin.2', 'berm.2a', 'berm.2b', 'teen.2', 'weg.2', 'sloot.2', 'mvb.bui']
+    lst_plot_profiel_x = ['x' + s for s in lst_plot_profiel]
+    lst_plot_profiel_y = ['y' + s for s in lst_plot_profiel]
+    lst_plot_profiel_y[-1] = 'ymv.bui'
+    lst_plot_profiel_y[3] = 'ysloot.1d'
+
+    if len(df_profiles_subset) > 0:
+        for index, row in df_profiles_subset.iterrows():
+            # Plot the profile line in the figure
+            x_vals = [row[x]
+                      for x in lst_plot_profiel_x if x in row and pd.notnull(row[x])]
+            y_vals = [row[y]
+                      for y in lst_plot_profiel_y if y in row and pd.notnull(row[y])]
+            if len(x_vals) > 1 and len(y_vals) > 1:
+                return x_vals, y_vals, closest_dp_profile
+            else:
+                logging.debug(
+                    f"Not enough data to get profile for dp{row['dp']:.1f}")
+                return None, None, closest_dp_profile
+    else:
+        logging.debug(
+            f"No surface level profile found for dp{dp_center:.1f} in region {region}")
+        return None, None, closest_dp_profile
