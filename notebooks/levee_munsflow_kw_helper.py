@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 
 import matplotlib.dates as mdates
 
+
 META_DATA_KEYS = [
     "region",
     "dp",
@@ -405,3 +406,51 @@ def plot_pb_precip(
         ax.grid(True)
 
     return fig, axes
+
+
+def calc_cummulative_precip(
+        precip_df,
+        cumulative_start_month=8,
+        month_names=['januari', 'februari', 'maart', 'april', 'mei', 'juni',
+                     'juli', 'augustus', 'september', 'oktober', 'november', 'december']
+):
+    """
+    Calculate cumulative precipitation from a DataFrame of precipitation data.
+    """
+
+    precip_df['date'] = precip_df.index
+    precip_df['year'] = precip_df['date'].dt.year
+    precip_df['month'] = precip_df['date'].dt.month
+    precip_df['season_year'] = precip_df['year']
+    precip_df.loc[precip_df['month'] <
+                  cumulative_start_month, 'season_year'] -= 1
+    precip_df['cumulative'] = precip_df.groupby(
+        'season_year')[precip_df.columns[0]].cumsum()
+
+    return precip_df, month_names[cumulative_start_month - 1]
+
+
+def plot_cummulative_precip(
+        precip_df,
+        month_name,
+        location=None,
+):
+    fig, ax = plt.subplots(figsize=(12, 4))
+    for year, group in precip_df.groupby('season_year'):
+        days_since_start = (
+            group['date'] - group['date'].iloc[0]).dt.total_seconds() / 86400
+        if year < 2026:
+            ax.plot(days_since_start, group['cumulative'],
+                    label=f'aug {year} - jul {year+1} ({group["cumulative"].iloc[-1]:.1f} m)')
+    ax.set_xticks([0, 30, 61, 91, 122, 153, 181, 212, 242, 273, 303, 334])
+    ax.set_xticklabels(['1 aug', '1 sep', '1 okt', '1 nov', '1 dec',
+                       '1 jan', '1 feb', '1 mrt', '1 apr', '1 mei', '1 jun', '1 jul'])
+
+    ax.set_title(f'Cumulatieve neerslag sinds 1 {month_name} voor {location}')
+    ax.set_ylabel('(m)')
+    ax.legend()
+    ax.set_xlim(0, 366)
+    ax.set_ylim(bottom=0)
+    ax.grid(True)
+
+    return fig, ax
