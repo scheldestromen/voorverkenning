@@ -1,3 +1,9 @@
+*.png
+# plots voor gekozen dijkpaal (941) wel uploaden
+!*941*.png
+!*col*.png
+!*unsat_quickplot*.png
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -206,4 +212,3 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-*.png

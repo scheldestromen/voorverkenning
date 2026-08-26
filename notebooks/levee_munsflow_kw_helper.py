@@ -7,6 +7,8 @@ import tempfile
 import matplotlib.pyplot as plt
 
 import matplotlib.dates as mdates
+
+# META DATA for additional meta data in ObsCollection
 META_DATA_KEYS = [
     "region",
     "dp",
@@ -223,7 +225,7 @@ def calc_cummulative_precip(
                      'juli', 'augustus', 'september', 'oktober', 'november', 'december']
 ):
     """
-    Calculate cumulative precipitation per hydrological season.
+    Calculate cumulative precipitation per specific season.
 
     Args:
         precip_df: DataFrame with a datetime index and precipitation values in the first column.
@@ -276,7 +278,7 @@ def plot_cummulative_precip(
         Tuple ``(fig, ax)`` of the Matplotlib figure and axes.
     """
     if fig is None and ax is None:
-        fig, ax = plt.subplots(figsize=(12, 4))
+        fig, ax = plt.subplots(figsize=(12, 7))
 
     if colors is None:
         colors = list(plt.get_cmap('tab10').colors)
@@ -409,33 +411,6 @@ def plot_dates_as_vline(
             ax.axvline(x=date, color=color, linewidth=0.5, label=label)
 
 
-def add_offset_for_close_points(oc, col_offset='distance_to_ref', suffix='plot', dup_offset=1.0):
-    """Add a plotting offset for duplicate x-values in an observation collection.
-
-    Args:
-        oc: DataFrame-like object containing the offset column.
-        col_offset: Source column with base x-coordinate values.
-        suffix: Suffix used for the generated plotting column name.
-        dup_offset: Offset increment added to duplicate values.
-
-    Returns:
-        Updated object with an extra column ``{col_offset}_{suffix}``.
-    """
-    col_offset_plot = f"{col_offset}_{suffix}"
-    oc[col_offset_plot] = oc[col_offset].copy()
-    oc = oc.sort_values(col_offset_plot)
-    while True:
-        dup_offset = oc.groupby(col_offset_plot).cumcount() * dup_offset
-
-        if dup_offset.gt(0).any():
-            oc[col_offset_plot] = oc[col_offset_plot] + dup_offset
-            oc = oc.sort_values(col_offset_plot)
-            continue
-        else:
-            break
-    return oc
-
-
 def short_legend_precip(ax):
     """Create a compact legend with unique non-empty labels for precipitation plots.
 
@@ -562,7 +537,8 @@ def plot_pb_precip(
         df_doodtij=None,
         start=None,
         end=None,
-        col_gwl='gwl_mnap'
+        col_gwl='gwl_mnap',
+        precip_col='RH'
 ):
     """Plot groundwater series and daily precipitation in a two-panel figure.
 
@@ -601,7 +577,7 @@ def plot_pb_precip(
     # onderste plot
     # neerslag
     # precip_df.loc[first_obs:end, 'cumulative'].plot(ax=axes[1], color='tab:red', linewidth=1.5, label=f'cummulatief sinds 1 {month_name}')
-    daily_precip = precip_df.loc[first_obs:end, 'RH'].resample(
+    daily_precip = precip_df.loc[first_obs:end, precip_col].resample(
         'D').sum() * 1000  # convert to mm
     axes[1].bar(
         daily_precip.index,
