@@ -4,13 +4,9 @@ import pandas as pd
 import logging
 import json
 import tempfile
-from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 
-
 import matplotlib.dates as mdates
-
-
 META_DATA_KEYS = [
     "region",
     "dp",
@@ -31,6 +27,15 @@ META_DATA_KEYS = [
 
 
 def _restore_timezone(obs, tz_name):
+    """Restore a timezone on an observation index when possible.
+
+    Args:
+        obs: Hydropandas observation-like object with an ``index`` attribute.
+        tz_name: Timezone name (for example ``Europe/Amsterdam``) or ``None``.
+
+    Returns:
+        The same observation object with a timezone-aware ``DatetimeIndex`` when conversion succeeds.
+    """
     idx = getattr(obs, "index", None)
     if tz_name is None or not isinstance(idx, pd.DatetimeIndex):
         return obs
@@ -48,7 +53,15 @@ def _restore_timezone(obs, tz_name):
 
 
 def _normalize_payload_for_from_dict(payload, obs_label="?"):
-    """Decode string-encoded JSON fields so hydropandas from_dict can parse them."""
+    """Normalize JSON payload fields before hydropandas ``from_dict``.
+
+    Args:
+        payload: Dictionary loaded from a JSON observation file.
+        obs_label: Observation label used in warning messages.
+
+    Returns:
+        A shallow copy of ``payload`` with ``obs`` and ``meta`` decoded when they are JSON strings.
+    """
     normalized = dict(payload)
 
     obs_raw = normalized.get("obs")
@@ -84,6 +97,15 @@ def json_to_hpd(
     json_zip: str,
     tz_meta_fn: str = "timezone_meta.json",
 ):
+    """Read zipped JSON observation files into a hydropandas ``ObsCollection``.
+
+    Args:
+        json_zip: Path to a zip file containing observation JSON files.
+        tz_meta_fn: Expected timezone metadata filename inside the zip.
+
+    Returns:
+        A hydropandas ``ObsCollection`` with metadata columns added when available.
+    """
     obs_list = []
 
     import zipfile
@@ -119,7 +141,7 @@ def json_to_hpd(
             and fn not in tz_meta_members
         ]
 
-        for json_path in tqdm(json_files, desc="JSON inlezen", unit="bestand"):
+        for json_path in json_files:
             with zip_ref.open(json_path, "r") as f:
                 json_text = io.TextIOWrapper(f, encoding="utf-8").read()
 
@@ -194,7 +216,142 @@ def json_to_hpd(
     return oc_gwl
 
 
+def calc_cummulative_precip(
+        precip_df,
+        cumulative_start_month=8,
+        month_names=['januari', 'februari', 'maart', 'april', 'mei', 'juni',
+                     'juli', 'augustus', 'september', 'oktober', 'november', 'december']
+):
+    """
+    Calculate cumulative precipitation per hydrological season.
+
+    Args:
+        precip_df: DataFrame with a datetime index and precipitation values in the first column.
+        cumulative_start_month: Month number (1-12) that defines the season start.
+        month_names: Month labels used to return the selected start month name.
+
+    Returns:
+        Tuple of ``(precip_df, month_name)`` where ``precip_df`` includes date, year,
+        month, season_year and cumulative columns.
+    """
+
+    precip_df['date'] = precip_df.index
+    precip_df['year'] = precip_df['date'].dt.year
+    precip_df['month'] = precip_df['date'].dt.month
+    precip_df['season_year'] = precip_df['year']
+    precip_df.loc[precip_df['month'] <
+                  cumulative_start_month, 'season_year'] -= 1
+    precip_df['cumulative'] = precip_df.groupby(
+        'season_year')[precip_df.columns[0]].cumsum()
+
+    return precip_df, month_names[cumulative_start_month - 1]
+
+
+def plot_cummulative_precip(
+        precip_df,
+        location=None,
+        fig=None,
+        ax=None,
+        ls='-',
+        colors=['r', 'g', 'b', 'c', 'm', 'y', 'k'],
+        location_in_legend=None,
+        cumulative_start_month=8,
+        month_names=['jan', 'feb', 'mrt', 'apr', 'mei', 'jun',
+                     'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
+):
+    """Plot cumulative precipitation curves per season year.
+
+    Args:
+        precip_df: DataFrame returned by ``calc_cummulative_precip``.
+        location: Optional location name for the title.
+        fig: Optional Matplotlib figure to draw on.
+        ax: Optional Matplotlib axes to draw on.
+        ls: Line style for plotted season curves.
+        colors: List of colors cycled per season.
+        location_in_legend: Optional location text prefix in legend labels.
+        cumulative_start_month: Month number (1-12) used in labels.
+        month_names: Month labels used for legend and title text.
+
+    Returns:
+        Tuple ``(fig, ax)`` of the Matplotlib figure and axes.
+    """
+    if fig is None and ax is None:
+        fig, ax = plt.subplots(figsize=(12, 4))
+
+    if colors is None:
+        colors = list(plt.get_cmap('tab10').colors)
+
+    if location_in_legend:
+        location_in_legend = location_in_legend + ', '
+
+    for i, (year, group) in enumerate(precip_df.groupby('season_year')):
+        days_since_start = (
+            group['date'] - group['date'].iloc[0]).dt.total_seconds() / 86400
+        if year < 2026:
+            ax.plot(days_since_start, group['cumulative'],
+                    label=f'{month_names[cumulative_start_month - 1]} {year} - {month_names[cumulative_start_month - 2]} {year+1}, {location_in_legend} som:{group["cumulative"].iloc[-1]:.1f} m',
+                    color=colors[i % len(colors)],
+                    ls=ls)
+
+    ax.set_xticks([0, 30, 61, 91, 122, 153, 181, 212, 242, 273, 303, 334])
+    ax.set_xticklabels(['1 aug', '1 sep', '1 okt', '1 nov', '1 dec',
+                        '1 jan', '1 feb', '1 mrt', '1 apr', '1 mei', '1 jun', '1 jul'])
+
+    if location_in_legend:
+        ax.set_title(
+            f'Cumulatieve neerslag sinds 1 {month_names[cumulative_start_month - 1]}')
+    else:
+        ax.set_title(
+            f'Cumulatieve neerslag sinds 1 {month_names[cumulative_start_month - 1]} voor {location}')
+    ax.set_ylabel('(m)')
+    handles, labels = ax.get_legend_handles_labels()
+    legend_items = sorted(zip(labels, handles), key=lambda item: item[0])
+    if legend_items:
+        sorted_labels, sorted_handles = zip(*legend_items)
+        ax.legend(sorted_handles, sorted_labels)
+    ax.set_xlim(0, 366)
+    ax.set_ylim(bottom=0)
+    ax.grid(True)
+
+    return fig, ax
+
+
+def add_offset_for_close_points(oc, col_offset='distance_to_ref', suffix='plot', dup_offset=1.0):
+    """Add a plotting offset for duplicate x-values in an observation collection.
+
+    Args:
+        oc: DataFrame-like object containing the offset column.
+        col_offset: Source column with base x-coordinate values.
+        suffix: Suffix used for the generated plotting column name.
+        dup_offset: Offset increment added to duplicate values.
+
+    Returns:
+        Updated object with an extra column ``{col_offset}_{suffix}``.
+    """
+    col_offset_plot = f"{col_offset}_{suffix}"
+    oc[col_offset_plot] = oc[col_offset].copy()
+    oc = oc.sort_values(col_offset_plot)
+    while True:
+        dup_offset = oc.groupby(col_offset_plot).cumcount() * dup_offset
+
+        if dup_offset.gt(0).any():
+            oc[col_offset_plot] = oc[col_offset_plot] + dup_offset
+            oc = oc.sort_values(col_offset_plot)
+            continue
+        else:
+            break
+    return oc
+
+
 def ax_lim_as_dates(ax):
+    """Return x-axis limits as timezone-naive pandas timestamps.
+
+    Args:
+        ax: Matplotlib axes object.
+
+    Returns:
+        Tuple ``(x_start, x_end)`` ordered from early to late timestamp.
+    """
     x0, x1 = ax.get_xlim()
     x_start, x_end = pd.to_datetime(
         mdates.num2date([x0, x1])).tz_localize(None)
@@ -211,6 +368,18 @@ def plot_dates_as_vline(
         color='tab:orange',
         label=None
 ):
+    """Draw vertical lines for dates that fall within current axis limits.
+
+    Args:
+        df: DataFrame containing datetime values in ``date_colname``.
+        ax: Single Matplotlib axes or list of axes.
+        date_colname: Name of the datetime column in ``df``.
+        color: Line color for the vertical markers.
+        label: Optional legend label for the markers.
+
+    Returns:
+        None. The function plots directly on the provided axes.
+    """
     # check if ax is a list
     if isinstance(ax, list):
         plot_axes = ax
@@ -241,6 +410,17 @@ def plot_dates_as_vline(
 
 
 def add_offset_for_close_points(oc, col_offset='distance_to_ref', suffix='plot', dup_offset=1.0):
+    """Add a plotting offset for duplicate x-values in an observation collection.
+
+    Args:
+        oc: DataFrame-like object containing the offset column.
+        col_offset: Source column with base x-coordinate values.
+        suffix: Suffix used for the generated plotting column name.
+        dup_offset: Offset increment added to duplicate values.
+
+    Returns:
+        Updated object with an extra column ``{col_offset}_{suffix}``.
+    """
     col_offset_plot = f"{col_offset}_{suffix}"
     oc[col_offset_plot] = oc[col_offset].copy()
     oc = oc.sort_values(col_offset_plot)
@@ -257,6 +437,14 @@ def add_offset_for_close_points(oc, col_offset='distance_to_ref', suffix='plot',
 
 
 def short_legend_precip(ax):
+    """Create a compact legend with unique non-empty labels for precipitation plots.
+
+    Args:
+        ax: Matplotlib axes containing plotted artists.
+
+    Returns:
+        None. The legend is created and attached to ``ax``.
+    """
     handles, labels = ax.get_legend_handles_labels()
     unique = {}
     for h, l in zip(handles, labels):
@@ -277,44 +465,19 @@ def short_legend_precip(ax):
     leg.set_clip_on(False)
 
 
-def plot_doodtij(
-        ax,
-        df_doodtij,
-        x_start=None,
-        x_end=None
-):
-    if x_start is None and x_end is None:
-        x_start, x_end = ax_lim_as_dates(ax)
-
-    # make doodtij_verwachting_localize timezone-naive
-    df_doodtij['doodtij_verwachting_localize'] = df_doodtij['doodtij_verwachting_localize'].apply(
-        lambda x: x.tz_localize(None) if getattr(
-            x, "tzinfo", None) is not None else x
-    )
-
-    for i, (_, row) in enumerate(df_doodtij.loc[(df_doodtij.doodtij_verwachting_localize >= x_start) & (df_doodtij.doodtij_verwachting_localize <= x_end)].iterrows()):
-        t_doodtij = row.doodtij_verwachting_localize
-
-        ax.axvline(
-            t_doodtij,
-            color='red',
-            linestyle='--',
-            alpha=0.5,
-            label='doodtij' if i == 0 else None
-        )
-
-
 def select_surfacelevelprofile(dp_center, df_profiles, delta_dp=1, region='Os'):
     """
-    Select and plot the surface level profiles  in the specified region.
-    Copied from Geolookup repo
+    Select the closest available surface level profile in a region.
+
     Args:
-        dp_center: Central dike pole number
-        df_profiles: DataFrame with surface level profiles
-        delta_dp: Range around central dike pole
-        region: Region name
+        dp_center: Central dike pole number.
+        df_profiles: DataFrame with surface level profile coordinates.
+        delta_dp: Search range around the central dike pole.
+        region: Region name.
+
     Returns:
-        closest_dp_profile: Closest dike pole with surface level profile
+        Tuple ``(x_vals, y_vals, closest_dp_profile)`` where coordinates can be
+        ``None`` when insufficient data is available.
     """
 
     # select data
@@ -355,6 +518,44 @@ def select_surfacelevelprofile(dp_center, df_profiles, delta_dp=1, region='Os'):
         return None, None, closest_dp_profile
 
 
+def plot_doodtij(
+        ax,
+        df_doodtij,
+        x_start=None,
+        x_end=None
+):
+    """Plot vertical lines for dead-tide moments within a selected period.
+
+    Args:
+        ax: Matplotlib axes to draw on.
+        df_doodtij: DataFrame with column ``doodtij_verwachting_localize``.
+        x_start: Optional period start. If omitted, derived from axis limits.
+        x_end: Optional period end. If omitted, derived from axis limits.
+
+    Returns:
+        None. The function plots directly on the provided axes.
+    """
+    if x_start is None and x_end is None:
+        x_start, x_end = ax_lim_as_dates(ax)
+
+    # make doodtij_verwachting_localize timezone-naive
+    df_doodtij['doodtij_verwachting_localize'] = df_doodtij['doodtij_verwachting_localize'].apply(
+        lambda x: x.tz_localize(None) if getattr(
+            x, "tzinfo", None) is not None else x
+    )
+
+    for i, (_, row) in enumerate(df_doodtij.loc[(df_doodtij.doodtij_verwachting_localize >= x_start) & (df_doodtij.doodtij_verwachting_localize <= x_end)].iterrows()):
+        t_doodtij = row.doodtij_verwachting_localize
+
+        ax.axvline(
+            t_doodtij,
+            color='red',
+            linestyle='--',
+            alpha=0.5,
+            label='doodtij' if i == 0 else None
+        )
+
+
 def plot_pb_precip(
         obs_gws,
         precip_df,
@@ -363,6 +564,19 @@ def plot_pb_precip(
         end=None,
         col_gwl='gwl_mnap'
 ):
+    """Plot groundwater series and daily precipitation in a two-panel figure.
+
+    Args:
+        obs_gws: Observation collection/DataFrame with ``obs`` time series per row.
+        precip_df: Precipitation DataFrame with an ``RH`` column and ``meta`` location.
+        df_doodtij: Optional DataFrame with dead-tide moments for annotation.
+        start: Optional start timestamp for selecting groundwater data.
+        end: End timestamp for both subplots.
+        col_gwl: Groundwater level column name inside each observation.
+
+    Returns:
+        Tuple ``(fig, axes)`` with the generated Matplotlib figure and axes array.
+    """
     fig, axes = plt.subplots(nrows=2, figsize=(
         12, 4), gridspec_kw={"hspace": 0.35})
 
@@ -406,51 +620,3 @@ def plot_pb_precip(
         ax.grid(True)
 
     return fig, axes
-
-
-def calc_cummulative_precip(
-        precip_df,
-        cumulative_start_month=8,
-        month_names=['januari', 'februari', 'maart', 'april', 'mei', 'juni',
-                     'juli', 'augustus', 'september', 'oktober', 'november', 'december']
-):
-    """
-    Calculate cumulative precipitation from a DataFrame of precipitation data.
-    """
-
-    precip_df['date'] = precip_df.index
-    precip_df['year'] = precip_df['date'].dt.year
-    precip_df['month'] = precip_df['date'].dt.month
-    precip_df['season_year'] = precip_df['year']
-    precip_df.loc[precip_df['month'] <
-                  cumulative_start_month, 'season_year'] -= 1
-    precip_df['cumulative'] = precip_df.groupby(
-        'season_year')[precip_df.columns[0]].cumsum()
-
-    return precip_df, month_names[cumulative_start_month - 1]
-
-
-def plot_cummulative_precip(
-        precip_df,
-        month_name,
-        location=None,
-):
-    fig, ax = plt.subplots(figsize=(12, 4))
-    for year, group in precip_df.groupby('season_year'):
-        days_since_start = (
-            group['date'] - group['date'].iloc[0]).dt.total_seconds() / 86400
-        if year < 2026:
-            ax.plot(days_since_start, group['cumulative'],
-                    label=f'aug {year} - jul {year+1} ({group["cumulative"].iloc[-1]:.1f} m)')
-    ax.set_xticks([0, 30, 61, 91, 122, 153, 181, 212, 242, 273, 303, 334])
-    ax.set_xticklabels(['1 aug', '1 sep', '1 okt', '1 nov', '1 dec',
-                       '1 jan', '1 feb', '1 mrt', '1 apr', '1 mei', '1 jun', '1 jul'])
-
-    ax.set_title(f'Cumulatieve neerslag sinds 1 {month_name} voor {location}')
-    ax.set_ylabel('(m)')
-    ax.legend()
-    ax.set_xlim(0, 366)
-    ax.set_ylim(bottom=0)
-    ax.grid(True)
-
-    return fig, ax
